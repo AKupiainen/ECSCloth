@@ -15,7 +15,7 @@ public class ClothAuthoring : MonoBehaviour
     [SerializeField] private bool[] _anchorPoints;
     
     [SerializeField] private float _defaultMass = 1.0f;
-    [SerializeField] private bool _variableMass = false;
+    [SerializeField] private bool _variableMass;
     [SerializeField] private float _edgeMassFactor = 1.5f;
     [SerializeField] private float _cornerMassFactor = 2.0f;
     [SerializeField] private AnimationCurve _massDistributionCurve;
@@ -24,11 +24,11 @@ public class ClothAuthoring : MonoBehaviour
     {
         public override void Bake(ClothAuthoring authoring)
         {
-            Entity[,] pointMasses = new Entity[authoring._width, authoring._height];
+            Entity[,] pointMasses = new Entity[authoring.Width, authoring.Height];
 
-            for (int x = 0; x < authoring._width; x++)
+            for (int x = 0; x < authoring.Width; x++)
             {
-                for (int y = 0; y < authoring._height; y++)
+                for (int y = 0; y < authoring.Height; y++)
                 {
                     Entity pointEntity = CreateAdditionalEntity(TransformUsageFlags.Dynamic);
                     
@@ -57,11 +57,11 @@ public class ClothAuthoring : MonoBehaviour
                 }
             }
 
-            for (int x = 0; x < authoring._width; x++)
+            for (int x = 0; x < authoring.Width; x++)
             {
-                for (int y = 0; y < authoring._height; y++)
+                for (int y = 0; y < authoring.Height; y++)
                 {
-                    if (x < authoring._width - 1)
+                    if (x < authoring.Width - 1)
                     {
                         CreateSpring(
                             pointMasses[x, y],
@@ -71,7 +71,7 @@ public class ClothAuthoring : MonoBehaviour
                         );
                     }
 
-                    if (y < authoring._height - 1)
+                    if (y < authoring.Height - 1)
                     {
                         CreateSpring(
                             pointMasses[x, y],
@@ -81,7 +81,7 @@ public class ClothAuthoring : MonoBehaviour
                         );
                     }
 
-                    if (x < authoring._width - 1 && y < authoring._height - 1)
+                    if (x < authoring.Width - 1 && y < authoring.Height - 1)
                     {
                         float diagonalLength = authoring._pointMassDistance * math.sqrt(2);
 
@@ -100,7 +100,7 @@ public class ClothAuthoring : MonoBehaviour
                         );
                     }
 
-                    if (x < authoring._width - 2)
+                    if (x < authoring.Width - 2)
                     {
                         CreateSpring(
                             pointMasses[x, y],
@@ -110,7 +110,7 @@ public class ClothAuthoring : MonoBehaviour
                         );
                     }
 
-                    if (y < authoring._height - 2)
+                    if (y < authoring.Height - 2)
                     {
                         CreateSpring(
                             pointMasses[x, y],
@@ -139,8 +139,8 @@ public class ClothAuthoring : MonoBehaviour
                 return authoring._defaultMass;
             }
             
-            bool isCorner = (x == 0 || x == authoring._width - 1) && (y == 0 || y == authoring._height - 1);
-            bool isEdge = x == 0 || x == authoring._width - 1 || y == 0 || y == authoring._height - 1;
+            bool isCorner = (x == 0 || x == authoring.Width - 1) && (y == 0 || y == authoring.Height - 1);
+            bool isEdge = x == 0 || x == authoring.Width - 1 || y == 0 || y == authoring.Height - 1;
             
             if (isCorner)
             {
@@ -154,8 +154,8 @@ public class ClothAuthoring : MonoBehaviour
             
             if (authoring._massDistributionCurve != null)
             {
-                float normalizedX = (float)x / (authoring._width - 1);
-                float normalizedY = (float)y / (authoring._height - 1);
+                float normalizedX = (float)x / (authoring.Width - 1);
+                float normalizedY = (float)y / (authoring.Height - 1);
                 
                 float centerX = 0.5f;
                 float centerY = 0.5f;
@@ -182,4 +182,8 @@ public class ClothAuthoring : MonoBehaviour
             });
         }
     }
+
+    public int Width => _width;
+
+    public int Height => _height;
 }
