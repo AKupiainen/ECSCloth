@@ -5,6 +5,7 @@ using Unity.Mathematics;
 using UnityEngine;
 
 [BurstCompile]
+[UpdateAfter(typeof(ClothSimulationSystem))]
 public partial struct ClothMeshSystem : ISystem
 {
     private bool _isInitialized;
@@ -60,10 +61,29 @@ public partial struct ClothMeshSystem : ISystem
             Entity meshEntity;
             DynamicBuffer<VertexPosition> vertexBuffer;
             DynamicBuffer<VertexNormal> normalBuffer;
-    
+
             if (!meshQuery.IsEmptyIgnoreFilter)
             {
-                meshEntity = meshQuery.GetSingletonEntity();
+                NativeArray<Entity> meshEntities = meshQuery.ToEntityArray(Allocator.Temp);
+                
+                try
+                {
+                    if (meshEntities.Length > 1)
+                    {
+                        Debug.LogWarning($"Found {meshEntities.Length} cloth mesh entities. Using the first one and ignoring others.");
+                        
+                        for (int i = 1; i < meshEntities.Length; i++)
+                        {
+                            state.EntityManager.DestroyEntity(meshEntities[i]);
+                        }
+                    }
+                    
+                    meshEntity = meshEntities[0];
+                }
+                finally
+                {
+                    meshEntities.Dispose();
+                }
         
                 state.EntityManager.SetComponentData(meshEntity, new ClothMeshTag
                 {
@@ -103,8 +123,9 @@ public partial struct ClothMeshSystem : ISystem
                 vertexBuffer.ResizeUninitialized(width * height);
                 normalBuffer.ResizeUninitialized(width * height);
             }
-    
+
             SortPointMassesByPosition(pointMasses, width, height);
+            SmoothEdges(pointMasses, width, height);
             
             for (int i = 0; i < pointMasses.Length && i < vertexBuffer.Length; i++)
             {
@@ -169,6 +190,7 @@ public partial struct ClothMeshSystem : ISystem
             }
             
             SortPointMassesByPosition(pointMasses, width, height);
+            SmoothEdges(pointMasses, width, height);
             
             for (int i = 0; i < pointMasses.Length && i < vertexBuffer.Length; i++)
             {
@@ -545,7 +567,6 @@ public partial struct ClothMeshSystem : ISystem
                 {
                     if (isEdge)
                     {
-                        // Get the ideal grid position
                         float3 idealPosition = new(
                             minX + x * cellWidth,
                             minY + y * cellHeight,
@@ -661,6 +682,185 @@ public partial struct ClothMeshSystem : ISystem
             int squareDim = Mathf.CeilToInt(Mathf.Sqrt(pointCount));
             width = squareDim;
             height = squareDim;
+        }
+    }
+    
+    [BurstCompile]
+    private void SmoothEdges(NativeArray<PointMass> points, int width, int height)
+    {
+        if (width <= 2 || height <= 2 || points.Length < width * height)
+        {
+            Debug.LogWarning($"Cannot smooth edges: dimensions too small or insufficient points. Width: {width}, Height: {height}, Points: {points.Length}");
+            return;
+        }
+
+        NativeArray<float3> smoothedPositions = new(points.Length, Allocator.Temp);
+        
+        for (int i = 0; i < points.Length; i++)
+        {
+            smoothedPositions[i] = points[i].Position;
+        }
+        
+        float edgeSmoothFactor = 1f;  
+        int smoothingPasses = 4;      
+        
+        NativeList<int> neighbors = new(8, Allocator.Temp);
+        
+        for (int pass = 0; pass < smoothingPasses; pass++)
+        {
+
+            for (int x = 0; x < width; x++)
+            {
+                int idx = x;  // y = 0
+                SmoothEdgeVertex(points, smoothedPositions, neighbors, idx, x, 0, width, height, edgeSmoothFactor);
+            }
+            
+            for (int x = 0; x < width; x++)
+            {
+                int idx = (height - 1) * width + x; 
+                SmoothEdgeVertex(points, smoothedPositions, neighbors, idx, x, height - 1, width, height, edgeSmoothFactor);
+            }
+            
+            
+            for (int y = 1; y < height - 1; y++)
+            {
+                int idx = y * width;  // x = 0
+                SmoothEdgeVertex(points, smoothedPositions, neighbors, idx, 0, y, width, height, edgeSmoothFactor);
+            }
+            
+            for (int y = 1; y < height - 1; y++)
+            {
+                int idx = y * width + (width - 1); 
+                SmoothEdgeVertex(points, smoothedPositions, neighbors, idx, width - 1, y, width, height, edgeSmoothFactor);
+            }
+            
+          
+            if (pass < smoothingPasses - 1)
+            {
+                for (int i = 0; i < points.Length; i++)
+                {
+                    PointMass temp = points[i];
+                    temp.Position = smoothedPositions[i];
+                    points[i] = temp;
+                }
+            }
+        }
+        
+        for (int i = 0; i < points.Length; i++)
+        {
+            PointMass temp = points[i];
+            temp.Position = smoothedPositions[i];
+            points[i] = temp;
+        }
+        
+        smoothedPositions.Dispose();
+        neighbors.Dispose();
+    }
+
+   [BurstCompile]
+    private void SmoothEdgeVertex(NativeArray<PointMass> points, NativeArray<float3> smoothedPositions, 
+                                 NativeList<int> neighbors, int vertexIndex, int x, int y, int width, int height, float smoothFactor)
+    {
+        if (vertexIndex < 0 || vertexIndex >= points.Length)
+        {
+            return;
+        }
+        
+        float3 originalPosition = points[vertexIndex].Position;
+        float3 smoothedPosition = originalPosition;
+        float totalWeight = 0;
+        
+        GetValidNeighborIndices(neighbors, x, y, width, height);
+        
+        if (neighbors.Length > 0)
+        {
+            float3 weightedSum = float3.zero;
+            
+            for (int i = 0; i < neighbors.Length; i++)
+            {
+                int neighborIdx = neighbors[i];
+                if (neighborIdx >= 0 && neighborIdx < points.Length)
+                {
+                    float3 neighborPos = points[neighborIdx].Position;
+                    float dist = math.distance(originalPosition, neighborPos);
+                    float weight = 1.0f / (0.1f + dist); 
+                    
+                    weightedSum += neighborPos * weight;
+                    totalWeight += weight;
+                }
+            }
+            
+            if (totalWeight > 0)
+            {
+                float3 averagePos = weightedSum / totalWeight;
+                averagePos.z = originalPosition.z;
+                
+                bool isCorner = (x == 0 || x == width - 1) && (y == 0 || y == height - 1);
+                float actualSmoothFactor = isCorner ? smoothFactor * 0.7f : smoothFactor;
+                
+                smoothedPosition = math.lerp(originalPosition, averagePos, actualSmoothFactor);
+            }
+        }
+        
+        smoothedPositions[vertexIndex] = smoothedPosition;
+    }
+
+    private void GetValidNeighborIndices(NativeList<int> neighbors, int x, int y, int width, int height)
+    {
+        neighbors.Clear();
+        int neighborCount = 8;
+        
+        NativeList<int> innerNeighbors = new(4, Allocator.Temp);
+        NativeList<int> edgeNeighbors = new(4, Allocator.Temp);
+        
+        try
+        {
+            for (int i = 0; i < neighborCount; i++)
+            {
+                int nx = x;
+                int ny = y;
+                
+                switch (i)
+                {
+                    case 0: nx = x - 1; ny = y - 1; break; // Top-left
+                    case 1: nx = x    ; ny = y - 1; break; // Top
+                    case 2: nx = x + 1; ny = y - 1; break; // Top-right
+                    case 3: nx = x - 1; ny = y    ; break; // Left
+                    case 4: nx = x + 1; ny = y    ; break; // Right
+                    case 5: nx = x - 1; ny = y + 1; break; // Bottom-left
+                    case 6: nx = x    ; ny = y + 1; break; // Bottom
+                    case 7: nx = x + 1; ny = y + 1; break; // Bottom-right
+                }
+                
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height)
+                {
+                    bool isInnerNeighbor = !(nx == 0 || nx == width - 1 || ny == 0 || ny == height - 1);
+                    
+                    if (isInnerNeighbor)
+                    {
+                        innerNeighbors.Add(ny * width + nx);
+                    }
+                    else
+                    {
+                        edgeNeighbors.Add(ny * width + nx);
+                    }
+                }
+            }
+            
+            for (int i = 0; i < innerNeighbors.Length; i++)
+            {
+                neighbors.Add(innerNeighbors[i]);
+            }
+            
+            for (int i = 0; i < edgeNeighbors.Length; i++)
+            {
+                neighbors.Add(edgeNeighbors[i]);
+            }
+        }
+        finally
+        {
+            innerNeighbors.Dispose();
+            edgeNeighbors.Dispose();
         }
     }
 }

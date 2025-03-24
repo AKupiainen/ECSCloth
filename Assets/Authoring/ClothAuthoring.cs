@@ -5,20 +5,39 @@ using UnityEngine;
 
 public class ClothAuthoring : MonoBehaviour
 {
+    [Header("Cloth Dimensions")]
     [SerializeField] private int _width = 10;
     [SerializeField] private int _height = 10;
     [SerializeField] private float _pointMassDistance = 0.25f;
-    [SerializeField] private float _springStiffness = 0.8f;
-    [SerializeField] private float _gravity = 9.8f;
-    [SerializeField] private float _timeStep = 0.016f; 
-    [SerializeField] private int _constraintIterations = 5;
     [SerializeField] private bool[] _anchorPoints;
     
+    [Header("Spring Properties")]
+    [SerializeField, Range(0.1f, 1.0f)] private float _springStiffness = 0.8f;
+    [SerializeField, Range(0.5f, 1.0f)] private float _diagonalStiffnessMultiplier = 0.8f;
+    [SerializeField, Range(0.3f, 0.8f)] private float _bendStiffnessMultiplier = 0.5f;
+    
+    [Header("Physics Parameters")]
+    [SerializeField, Range(0f, 20f)] private float _gravity = 9.8f;
+    [SerializeField, Range(0.001f, 0.05f)] private float _timeStep = 0.016f; 
+    [SerializeField, Range(1, 10)] private int _constraintIterations = 5;
+    [SerializeField, Range(1, 10)] private int _substeps = 3;
+    [SerializeField, Range(0f, 0.2f)] private float _damping = 0.05f;
+    
+    [Header("Mass Distribution")]
     [SerializeField] private float _defaultMass = 1.0f;
     [SerializeField] private bool _variableMass;
-    [SerializeField] private float _edgeMassFactor = 1.5f;
-    [SerializeField] private float _cornerMassFactor = 2.0f;
+    [SerializeField, Range(1f, 3f)] private float _edgeMassFactor = 1.5f;
+    [SerializeField, Range(1.5f, 5f)] private float _cornerMassFactor = 2.0f;
     [SerializeField] private AnimationCurve _massDistributionCurve;
+    
+    [Header("Wind Settings")]
+    [SerializeField] private bool _enableWind = false;
+    [SerializeField, Range(0f, 10f)] private float _windForce = 1.0f;
+    [SerializeField] private Vector3 _windDirection = new(1, 0, 0);
+    
+    [Header("Self Collision")]
+    [SerializeField] private bool _enableSelfCollision = false;
+    [SerializeField, Range(0.05f, 1f)] private float _selfCollisionRadius = 0.1f;
 
     private class ClothBaker : Baker<ClothAuthoring>
     {
@@ -84,29 +103,32 @@ public class ClothAuthoring : MonoBehaviour
                     if (x < authoring.Width - 1 && y < authoring.Height - 1)
                     {
                         float diagonalLength = authoring._pointMassDistance * math.sqrt(2);
+                        float diagonalStiffness = authoring._springStiffness * authoring._diagonalStiffnessMultiplier;
 
                         CreateSpring(
                             pointMasses[x, y],
                             pointMasses[x + 1, y + 1],
                             diagonalLength,
-                            authoring._springStiffness * 0.8f
+                            diagonalStiffness
                         );
 
                         CreateSpring(
                             pointMasses[x + 1, y],
                             pointMasses[x, y + 1],
                             diagonalLength,
-                            authoring._springStiffness * 0.8f
+                            diagonalStiffness
                         );
                     }
 
+                    float bendStiffness = authoring._springStiffness * authoring._bendStiffnessMultiplier;
+                    
                     if (x < authoring.Width - 2)
                     {
                         CreateSpring(
                             pointMasses[x, y],
                             pointMasses[x + 2, y],
                             authoring._pointMassDistance * 2,
-                            authoring._springStiffness * 0.5f
+                            bendStiffness
                         );
                     }
 
@@ -116,19 +138,29 @@ public class ClothAuthoring : MonoBehaviour
                             pointMasses[x, y],
                             pointMasses[x, y + 2],
                             authoring._pointMassDistance * 2,
-                            authoring._springStiffness * 0.5f
+                            bendStiffness
                         );
                     }
                 }
             }
 
             Entity settingsEntity = CreateAdditionalEntity(TransformUsageFlags.None);
-
+            
             AddComponent(settingsEntity, new ClothSettings
             {
                 Gravity = authoring._gravity,
                 TimeStep = authoring._timeStep,
-                ConstraintIterations = authoring._constraintIterations
+                ConstraintIterations = authoring._constraintIterations,
+                Damping = authoring._damping,
+                Substeps = authoring._substeps,
+                WindForce = authoring._enableWind ? authoring._windForce : 0,
+                WindDirection = math.normalize(new float3(
+                    authoring._windDirection.x,
+                    authoring._windDirection.y,
+                    authoring._windDirection.z
+                )),
+                EnableSelfCollision = authoring._enableSelfCollision,
+                SelfCollisionRadius = authoring._selfCollisionRadius
             });
         }
 
@@ -152,7 +184,7 @@ public class ClothAuthoring : MonoBehaviour
                 return authoring._defaultMass * authoring._edgeMassFactor;
             }
             
-            if (authoring._massDistributionCurve != null)
+            if (authoring._massDistributionCurve is { length: > 0 })
             {
                 float normalizedX = (float)x / (authoring.Width - 1);
                 float normalizedY = (float)y / (authoring.Height - 1);
@@ -186,4 +218,72 @@ public class ClothAuthoring : MonoBehaviour
     public int Width => _width;
 
     public int Height => _height;
+    
+#if UNITY_EDITOR
+    private void OnDrawGizmos()
+    {
+        Gizmos.color = Color.white;
+        
+        // Draw cloth grid
+        for (int x = 0; x < _width; x++)
+        {
+            for (int y = 0; y < _height; y++)
+            {
+                Vector3 pos = transform.position + new Vector3(
+                    x * _pointMassDistance,
+                    -y * _pointMassDistance,
+                    0
+                );
+                
+                bool isAnchored = y == 0 && (_anchorPoints == null ||
+                                           _anchorPoints.Length <= x ||
+                                           _anchorPoints[x]);
+                
+                Gizmos.color = isAnchored ? Color.red : Color.white;
+                Gizmos.DrawSphere(pos, 0.05f);
+                
+                if (x < _width - 1)
+                {
+                    Vector3 next = transform.position + new Vector3(
+                        (x + 1) * _pointMassDistance,
+                        -y * _pointMassDistance,
+                        0
+                    );
+                    Gizmos.color = Color.cyan;
+                    Gizmos.DrawLine(pos, next);
+                }
+                
+                if (y < _height - 1)
+                {
+                    Vector3 next = transform.position + new Vector3(
+                        x * _pointMassDistance,
+                        -(y + 1) * _pointMassDistance,
+                        0
+                    );
+                    Gizmos.color = Color.cyan;
+                    Gizmos.DrawLine(pos, next);
+                }
+            }
+        }
+        
+        if (_enableWind && _windForce > 0)
+        {
+            Gizmos.color = Color.yellow;
+            Vector3 center = transform.position + new Vector3(
+                _width * _pointMassDistance * 0.5f,
+                -_height * _pointMassDistance * 0.5f,
+                0
+            );
+            
+            Vector3 windDir = _windDirection.normalized; 
+            float arrowLength = 2.0f;
+            Gizmos.DrawRay(center, windDir * arrowLength);
+            
+            Vector3 right = Vector3.Cross(Vector3.forward, windDir).normalized;
+            Vector3 arrowEnd = center + windDir * arrowLength;
+            Gizmos.DrawRay(arrowEnd, -windDir * 0.3f + right * 0.15f);
+            Gizmos.DrawRay(arrowEnd, -windDir * 0.3f - right * 0.15f);
+        }
+    }
+#endif
 }

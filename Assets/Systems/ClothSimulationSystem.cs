@@ -9,7 +9,6 @@ using Unity.Transforms;
 [UpdateInGroup(typeof(SimulationSystemGroup))]
 public partial struct ClothSimulationSystem : ISystem
 {
-    // Store reference to entity data
     private EntityQuery _pointMassQuery;
     private EntityQuery _springQuery;
     private EntityQuery _transformQuery;
@@ -22,8 +21,9 @@ public partial struct ClothSimulationSystem : ISystem
     {
         public float3 Position;
         public float3 PreviousPosition;
+        public float3 Velocity;     
         public bool IsAnchored;
-        public float Mass;  // Added mass property
+        public float Mass;
     }
     
     [BurstCompile]
@@ -62,7 +62,8 @@ public partial struct ClothSimulationSystem : ISystem
             ? clothSettings.TimeStep 
             : SystemAPI.Time.DeltaTime;
         
-        float deltaTimeSq = deltaTime * deltaTime;
+        int substeps = clothSettings.Substeps > 0 ? clothSettings.Substeps : 1;
+        float subDeltaTime = deltaTime / substeps;
         float3 gravity = new(0, -clothSettings.Gravity, 0);
         
         int pointMassCount = _pointMassQuery.CalculateEntityCount();
@@ -98,15 +99,19 @@ public partial struct ClothSimulationSystem : ISystem
         NativeArray<Entity> pointMassEntitiesFromQuery = _pointMassQuery.ToEntityArray(Allocator.TempJob);
         NativeArray<PointMass> pointMassComponentsFromQuery = _pointMassQuery.ToComponentDataArray<PointMass>(Allocator.TempJob);
         
+        // Calculate initial velocities
         for (int i = 0; i < pointMassCount; i++)
         {
             _pointMassEntities[i] = pointMassEntitiesFromQuery[i];
+            float3 velocity = (pointMassComponentsFromQuery[i].Position - pointMassComponentsFromQuery[i].PreviousPosition) / deltaTime;
+            
             _pointMassArray[i] = new PointMassData
             {
                 Position = pointMassComponentsFromQuery[i].Position,
                 PreviousPosition = pointMassComponentsFromQuery[i].PreviousPosition,
+                Velocity = velocity,
                 IsAnchored = pointMassComponentsFromQuery[i].IsAnchored,
-                Mass = pointMassComponentsFromQuery[i].Mass 
+                Mass = pointMassComponentsFromQuery[i].Mass
             };
         }
         
@@ -117,34 +122,69 @@ public partial struct ClothSimulationSystem : ISystem
             _springArray[i] = springsFromQuery[i];
         }
         
-        ApplyForcesJob applyForcesJob = new()
-        {
-            PointMassArray = _pointMassArray,
-            Gravity = gravity,
-            DeltaTimeSq = deltaTimeSq
-        };
-        
-        state.Dependency = applyForcesJob.Schedule(_pointMassArray.Length, 64, state.Dependency);
-        state.Dependency.Complete();
-        
         NativeHashMap<Entity, int> entityToIndexMap = new(pointMassCount, Allocator.TempJob);
-        
         for (int i = 0; i < pointMassCount; i++)
         {
             entityToIndexMap.Add(_pointMassEntities[i], i);
         }
         
-        for (int i = 0; i < clothSettings.ConstraintIterations; i++)
+        for (int step = 0; step < substeps; step++)
         {
-            ProcessConstraintsJob constraintsJob = new()
+            ApplyDampingJob dampingJob = new()
             {
                 PointMassArray = _pointMassArray,
-                SpringArray = _springArray,
-                EntityToIndexMap = entityToIndexMap,
-                IterationFactor = 1.0f / clothSettings.ConstraintIterations
+                DampingFactor = clothSettings.Damping
             };
             
-            state.Dependency = constraintsJob.Schedule(_springArray.Length, 64, state.Dependency);
+            state.Dependency = dampingJob.Schedule(_pointMassArray.Length, 64, state.Dependency);
+            state.Dependency.Complete();
+            
+            ApplyForcesJob applyForcesJob = new()
+            {
+                PointMassArray = _pointMassArray,
+                Gravity = gravity,
+                DeltaTime = subDeltaTime,
+                WindForce = clothSettings.WindForce,
+                WindDirection = clothSettings.WindDirection,
+                TimeVariance = (float)SystemAPI.Time.ElapsedTime
+            };
+            
+            state.Dependency = applyForcesJob.Schedule(_pointMassArray.Length, 64, state.Dependency);
+            state.Dependency.Complete();
+            
+            for (int i = 0; i < clothSettings.ConstraintIterations; i++)
+            {
+                ProcessConstraintsJob constraintsJob = new()
+                {
+                    PointMassArray = _pointMassArray,
+                    SpringArray = _springArray,
+                    EntityToIndexMap = entityToIndexMap,
+                    IterationFactor = 1.0f / clothSettings.ConstraintIterations
+                };
+                
+                state.Dependency = constraintsJob.Schedule(_springArray.Length, 64, state.Dependency);
+                state.Dependency.Complete();
+            }
+            
+            if (clothSettings.EnableSelfCollision && _pointMassArray.Length > 0)
+            {
+                SelfCollisionJob selfCollisionJob = new()
+                {
+                    PointMassArray = _pointMassArray,
+                    CollisionRadius = clothSettings.SelfCollisionRadius
+                };
+                
+                state.Dependency = selfCollisionJob.Schedule(_pointMassArray.Length, 64, state.Dependency);
+                state.Dependency.Complete();
+            }
+            
+            UpdateVelocityJob velocityJob = new()
+            {
+                PointMassArray = _pointMassArray,
+                DeltaTime = subDeltaTime
+            };
+            
+            state.Dependency = velocityJob.Schedule(_pointMassArray.Length, 64, state.Dependency);
             state.Dependency.Complete();
         }
         
@@ -167,11 +207,10 @@ public partial struct ClothSimulationSystem : ISystem
     }
     
     [BurstCompile]
-    private struct ApplyForcesJob : IJobParallelFor
+    private struct ApplyDampingJob : IJobParallelFor
     {
         public NativeArray<PointMassData> PointMassArray;
-        public float3 Gravity;
-        public float DeltaTimeSq;
+        public float DampingFactor;
         
         public void Execute(int index)
         {
@@ -181,19 +220,61 @@ public partial struct ClothSimulationSystem : ISystem
             {
                 return;
             }
+            pointMass.Velocity *= math.max(0, 1.0f - DampingFactor);
+            pointMass.PreviousPosition = pointMass.Position;
+            
+            PointMassArray[index] = pointMass;
+        }
+    }
+    
+    [BurstCompile]
+    private struct ApplyForcesJob : IJobParallelFor
+    {
+        public NativeArray<PointMassData> PointMassArray;
+        public float3 Gravity;
+        public float DeltaTime;
+        public float3 WindDirection;
+        public float WindForce;
+        public float TimeVariance;
+    
+        public void Execute(int index)
+        {
+            PointMassData pointMass = PointMassArray[index];
+        
+            if (pointMass.IsAnchored)
+            {
+                return;
+            }
 
-            float3 acceleration = Gravity; // Gravity is the same regardless of mass
+            float3 acceleration = Gravity;
+        
+            if (WindForce > 0)
+            {
+                float windDirLength = math.length(WindDirection);
+                if (windDirLength > 1e-5f)
+                {
+                    float3 safeWindDir = WindDirection / windDirLength;
+                
+                    float safeWindForce = math.min(WindForce, 5.0f);
+                    float noise = math.sin(TimeVariance * 2.0f + index * 0.1f) * 0.2f + 0.8f;
+                    
+                    float3 wind = safeWindDir * safeWindForce * noise;
+                    acceleration += wind / math.max(0.01f, pointMass.Mass);
+                }
+            }
             
-            // For other forces, we would divide by mass: force / mass = acceleration
-            // Example: if we had wind or other forces
-            // acceleration += externalForce / pointMass.Mass;
+            pointMass.Velocity += acceleration * DeltaTime;
             
-            float3 currentPos = pointMass.Position;
-            float3 previousPos = pointMass.PreviousPosition;
-            float3 newPosition = currentPos + (currentPos - previousPos) + acceleration * DeltaTimeSq;
+            float maxVelocity = 15.0f;
+            float velocityLength = math.length(pointMass.Velocity);
             
-            pointMass.PreviousPosition = currentPos;
-            pointMass.Position = newPosition;
+            if (velocityLength > maxVelocity)
+            {
+                pointMass.Velocity *= (maxVelocity / velocityLength);
+            }
+        
+            pointMass.Position += pointMass.Velocity * DeltaTime;
+        
             PointMassArray[index] = pointMass;
         }
     }
@@ -228,8 +309,14 @@ public partial struct ClothSimulationSystem : ISystem
                 return;
             }
 
-            float correction = (currentDistance - spring.RestLength) / currentDistance;
-            float stiffnessFactor = spring.Stiffness * IterationFactor;
+            float3 direction = delta / currentDistance;
+            float correction = (currentDistance - spring.RestLength);
+            
+            float stretchFactor = math.abs(correction) / spring.RestLength;
+            float adjustedStiffness = spring.Stiffness * (1.0f + stretchFactor * 0.5f);
+            adjustedStiffness = math.min(adjustedStiffness, 1.0f);
+            
+            float stiffnessFactor = adjustedStiffness * IterationFactor;
             
             if (!pointA.IsAnchored && !pointB.IsAnchored)
             {
@@ -237,21 +324,105 @@ public partial struct ClothSimulationSystem : ISystem
                 float massRatioA = pointB.Mass / totalMass;
                 float massRatioB = pointA.Mass / totalMass;
                 
-                float3 offset = delta * correction * stiffnessFactor;
+                float3 offset = direction * correction * stiffnessFactor;
                 pointA.Position += offset * massRatioA;
                 pointB.Position -= offset * massRatioB;
             }
             else if (!pointA.IsAnchored)
             {
-                pointA.Position += delta * correction * stiffnessFactor;
+                pointA.Position += direction * correction * stiffnessFactor;
             }
             else if (!pointB.IsAnchored)
             {
-                pointB.Position -= delta * correction * stiffnessFactor;
+                pointB.Position -= direction * correction * stiffnessFactor;
             }
             
             PointMassArray[pointAIndex] = pointA;
             PointMassArray[pointBIndex] = pointB;
+        }
+    }
+    
+    [BurstCompile]
+    private struct SelfCollisionJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction] 
+        public NativeArray<PointMassData> PointMassArray;
+        public float CollisionRadius;
+        
+        public void Execute(int index)
+        {
+            PointMassData pointA = PointMassArray[index];
+            if (pointA.IsAnchored)
+            {
+                return; 
+            }
+            
+            int rangeStart = math.max(0, index - 20);
+            int rangeEnd = math.min(PointMassArray.Length - 1, index + 20);
+            
+            for (int i = rangeStart; i <= rangeEnd; i += 3)
+            {
+                if (i == index)
+                {
+                    continue;
+                }
+
+                PointMassData pointB = PointMassArray[i];
+                
+                float3 delta = pointB.Position - pointA.Position;
+                float distanceSq = math.lengthsq(delta);
+                float radiusSq = CollisionRadius * CollisionRadius;
+                
+                if (distanceSq > 0 && distanceSq < radiusSq)
+                {
+                    float distance = math.sqrt(distanceSq);
+                    float3 normal = delta / distance;
+                    float penetration = CollisionRadius - distance;
+                    
+                    float correctionFactor = 0.5f;
+                    
+                    if (!pointB.IsAnchored)
+                    {
+                        float totalMass = pointA.Mass + pointB.Mass;
+                        float massRatioA = pointB.Mass / totalMass;
+                        
+                        pointA.Position -= normal * penetration * correctionFactor * massRatioA;
+                        PointMassArray[index] = pointA;
+                    }
+                    else
+                    {
+                        pointA.Position -= normal * penetration * correctionFactor;
+                        PointMassArray[index] = pointA;
+                    }
+                }
+            }
+        }
+    }
+    
+    [BurstCompile]
+    private struct UpdateVelocityJob : IJobParallelFor
+    {
+        public NativeArray<PointMassData> PointMassArray;
+        public float DeltaTime;
+        
+        public void Execute(int index)
+        {
+            PointMassData pointMass = PointMassArray[index];
+            
+            if (!pointMass.IsAnchored)
+            {
+                pointMass.Velocity = (pointMass.Position - pointMass.PreviousPosition) / DeltaTime;
+                
+                float maxVelocity = 10f;
+                float velocityMagnitude = math.length(pointMass.Velocity);
+                
+                if (velocityMagnitude > maxVelocity)
+                {
+                    pointMass.Velocity *= (maxVelocity / velocityMagnitude);
+                }
+                
+                PointMassArray[index] = pointMass;
+            }
         }
     }
     
