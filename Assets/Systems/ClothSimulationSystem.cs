@@ -99,7 +99,6 @@ public partial struct ClothSimulationSystem : ISystem
         NativeArray<Entity> pointMassEntitiesFromQuery = _pointMassQuery.ToEntityArray(Allocator.TempJob);
         NativeArray<PointMass> pointMassComponentsFromQuery = _pointMassQuery.ToComponentDataArray<PointMass>(Allocator.TempJob);
         
-        // Calculate initial velocities
         for (int i = 0; i < pointMassCount; i++)
         {
             _pointMassEntities[i] = pointMassEntitiesFromQuery[i];
