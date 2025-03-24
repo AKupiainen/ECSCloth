@@ -32,8 +32,17 @@ public class ClothAuthoring : MonoBehaviour
     
     [Header("Wind Settings")]
     [SerializeField] private bool _enableWind = false;
-    [SerializeField, Range(0f, 10f)] private float _windForce = 1.0f;
-    [SerializeField] private Vector3 _windDirection = new(1, 0, 0);
+    [SerializeField, Range(0f, 10f)] private float _baseWindForce = 1.0f;
+    [SerializeField] private Vector3 _baseWindDirection = new(1, 0, 0);
+    
+    [Header("Wind Randomization")]
+    [SerializeField] private bool _randomizeWind = true;
+    [SerializeField, Range(0f, 1f)] private float _windDirectionVariation = 0.3f;
+    [SerializeField, Range(0f, 1f)] private float _windForceVariation = 0.5f;
+    [SerializeField, Range(0.1f, 5f)] private float _windChangeSpeed = 1.0f;
+    [SerializeField] private AnimationCurve _windGustPattern;
+    [SerializeField, Range(0f, 10f)] private float _gustFrequency = 2.0f;
+    [SerializeField, Range(1f, 5f)] private float _gustIntensity = 2.0f;
     
     [Header("Self Collision")]
     [SerializeField] private bool _enableSelfCollision = false;
@@ -146,6 +155,13 @@ public class ClothAuthoring : MonoBehaviour
 
             Entity settingsEntity = CreateAdditionalEntity(TransformUsageFlags.None);
             
+            float windForce = authoring._enableWind ? authoring._baseWindForce : 0;
+            float3 windDirection = math.normalize(new float3(
+                authoring._baseWindDirection.x,
+                authoring._baseWindDirection.y,
+                authoring._baseWindDirection.z
+            ));
+            
             AddComponent(settingsEntity, new ClothSettings
             {
                 Gravity = authoring._gravity,
@@ -153,15 +169,29 @@ public class ClothAuthoring : MonoBehaviour
                 ConstraintIterations = authoring._constraintIterations,
                 Damping = authoring._damping,
                 Substeps = authoring._substeps,
-                WindForce = authoring._enableWind ? authoring._windForce : 0,
-                WindDirection = math.normalize(new float3(
-                    authoring._windDirection.x,
-                    authoring._windDirection.y,
-                    authoring._windDirection.z
-                )),
+                WindForce = windForce,
+                WindDirection = windDirection,
                 EnableSelfCollision = authoring._enableSelfCollision,
                 SelfCollisionRadius = authoring._selfCollisionRadius
             });
+            
+            if (authoring._enableWind && authoring._randomizeWind)
+            {
+                AddComponent(settingsEntity, new WindRandomizationSettings
+                {
+                    BaseWindForce = authoring._baseWindForce,
+                    BaseWindDirection = windDirection,
+                    DirectionVariation = authoring._windDirectionVariation,
+                    ForceVariation = authoring._windForceVariation,
+                    ChangeSpeed = authoring._windChangeSpeed,
+                    GustFrequency = authoring._gustFrequency,
+                    GustIntensity = authoring._gustIntensity,
+                    LastUpdateTime = 0,
+                    NoiseOffsetX = UnityEngine.Random.Range(0f, 1000f),
+                    NoiseOffsetY = UnityEngine.Random.Range(0f, 1000f),
+                    NoiseOffsetZ = UnityEngine.Random.Range(0f, 1000f)
+                });
+            }
         }
 
         private float CalculatePointMass(ClothAuthoring authoring, int x, int y)
@@ -266,7 +296,7 @@ public class ClothAuthoring : MonoBehaviour
             }
         }
         
-        if (_enableWind && _windForce > 0)
+        if (_enableWind && _baseWindForce > 0)
         {
             Gizmos.color = Color.yellow;
             Vector3 center = transform.position + new Vector3(
@@ -275,7 +305,7 @@ public class ClothAuthoring : MonoBehaviour
                 0
             );
             
-            Vector3 windDir = _windDirection.normalized; 
+            Vector3 windDir = _baseWindDirection.normalized; 
             float arrowLength = 2.0f;
             Gizmos.DrawRay(center, windDir * arrowLength);
             
@@ -283,6 +313,17 @@ public class ClothAuthoring : MonoBehaviour
             Vector3 arrowEnd = center + windDir * arrowLength;
             Gizmos.DrawRay(arrowEnd, -windDir * 0.3f + right * 0.15f);
             Gizmos.DrawRay(arrowEnd, -windDir * 0.3f - right * 0.15f);
+            
+            if (_randomizeWind)
+            {
+                Gizmos.color = new Color(1f, 0.7f, 0.2f, 0.6f);
+                float variation = _windDirectionVariation * 0.5f;
+                Vector3 altDir1 = Quaternion.AngleAxis(variation * 45f, Vector3.forward) * windDir;
+                Vector3 altDir2 = Quaternion.AngleAxis(-variation * 45f, Vector3.forward) * windDir;
+                
+                Gizmos.DrawRay(center, altDir1 * arrowLength * 0.7f);
+                Gizmos.DrawRay(center, altDir2 * arrowLength * 0.7f);
+            }
         }
     }
 #endif
