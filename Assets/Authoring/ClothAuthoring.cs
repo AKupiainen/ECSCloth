@@ -31,7 +31,7 @@ public class ClothAuthoring : MonoBehaviour
     [SerializeField] private AnimationCurve _massDistributionCurve;
     
     [Header("Wind Settings")]
-    [SerializeField] private bool _enableWind = false;
+    [SerializeField] private bool _enableWind;
     [SerializeField, Range(0f, 10f)] private float _baseWindForce = 1.0f;
     [SerializeField] private Vector3 _baseWindDirection = new(1, 0, 0);
     
