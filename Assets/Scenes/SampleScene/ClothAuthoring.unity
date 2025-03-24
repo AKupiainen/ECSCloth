@@ -154,16 +154,33 @@ MonoBehaviour:
   _width: 25
   _height: 25
   _pointMassDistance: 0.25
+  _anchorPoints: 01010101010101010101010101010101010101010101010101
   _springStiffness: 0.8
+  _diagonalStiffnessMultiplier: 0.8
+  _bendStiffnessMultiplier: 0.5
   _gravity: 9.8
   _timeStep: 0.016
   _constraintIterations: 5
-  _anchorPoints: 01000000000000000000000000000000000000000000000001
-  _defaultMass: 1
-  _variableMass: 0
+  _substeps: 3
+  _damping: 0.05
+  _defaultMass: 0.8
+  _variableMass: 1
   _edgeMassFactor: 1.5
   _cornerMassFactor: 2
   _massDistributionCurve:
+    serializedVersion: 2
+    m_Curve: []
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  _enableWind: 1
+  _baseWindForce: 3.18
+  _baseWindDirection: {x: 1, y: 1, z: 1}
+  _randomizeWind: 1
+  _windDirectionVariation: 1
+  _windForceVariation: 0.5
+  _windChangeSpeed: 1
+  _windGustPattern:
     serializedVersion: 2
     m_Curve:
     - serializedVersion: 3
@@ -187,6 +204,11 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+  _gustFrequency: 2
+  _gustIntensity: 2
+  _enableSelfCollision: 1
+  _selfCollisionRadius: 0.1
+  _showGizmos: 0
 --- !u!4 &471866161
 Transform:
   m_ObjectHideFlags: 0
