@@ -701,8 +701,8 @@ public partial struct ClothMeshSystem : ISystem
             smoothedPositions[i] = points[i].Position;
         }
         
-        float edgeSmoothFactor = 1f;  
-        int smoothingPasses = 4;      
+        float edgeSmoothFactor = 0.5f;  
+        int smoothingPasses = 2;      
         
         NativeList<int> neighbors = new(8, Allocator.Temp);
         
@@ -756,8 +756,8 @@ public partial struct ClothMeshSystem : ISystem
         smoothedPositions.Dispose();
         neighbors.Dispose();
     }
-
-   [BurstCompile]
+    
+    [BurstCompile]
     private void SmoothEdgeVertex(NativeArray<PointMass> points, NativeArray<float3> smoothedPositions, 
                                  NativeList<int> neighbors, int vertexIndex, int x, int y, int width, int height, float smoothFactor)
     {
@@ -783,7 +783,16 @@ public partial struct ClothMeshSystem : ISystem
                 {
                     float3 neighborPos = points[neighborIdx].Position;
                     float dist = math.distance(originalPosition, neighborPos);
-                    float weight = 1.0f / (0.1f + dist); 
+                    
+                    float weight = 1.0f / math.max(0.5f, dist);
+                    
+                    int nx = neighborIdx % width;
+                    int ny = neighborIdx / width;
+                    bool isEdgeNeighbor = nx == 0 || nx == width - 1 || ny == 0 || ny == height - 1;
+                    
+                    if (!isEdgeNeighbor) {
+                        weight *= 0.5f;
+                    }
                     
                     weightedSum += neighborPos * weight;
                     totalWeight += weight;
@@ -793,10 +802,23 @@ public partial struct ClothMeshSystem : ISystem
             if (totalWeight > 0)
             {
                 float3 averagePos = weightedSum / totalWeight;
-                averagePos.z = originalPosition.z;
                 
-                bool isCorner = (x == 0 || x == width - 1) && (y == 0 || y == height - 1);
-                float actualSmoothFactor = isCorner ? smoothFactor * 0.7f : smoothFactor;
+                averagePos.z = originalPosition.z;
+                float actualSmoothFactor;
+                
+                if ((x == 0 && y == 0) || (x == 0 && y == height - 1) || 
+                    (x == width - 1 && y == 0) || (x == width - 1 && y == height - 1))
+                {
+                    actualSmoothFactor = smoothFactor * 0.3f;
+                }
+                else if (x == 0 || x == width - 1 || y == 0 || y == height - 1)
+                {
+                    actualSmoothFactor = smoothFactor * 0.5f;
+                }
+                else
+                {
+                    actualSmoothFactor = smoothFactor;
+                }
                 
                 smoothedPosition = math.lerp(originalPosition, averagePos, actualSmoothFactor);
             }
