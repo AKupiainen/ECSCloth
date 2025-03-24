@@ -48,6 +48,8 @@ public class ClothAuthoring : MonoBehaviour
     [SerializeField] private bool _enableSelfCollision = false;
     [SerializeField, Range(0.05f, 1f)] private float _selfCollisionRadius = 0.1f;
 
+    [SerializeField] private bool _showGizmos;
+    
     private class ClothBaker : Baker<ClothAuthoring>
     {
         public override void Bake(ClothAuthoring authoring)
@@ -252,6 +254,11 @@ public class ClothAuthoring : MonoBehaviour
 #if UNITY_EDITOR
     private void OnDrawGizmos()
     {
+        if (!_showGizmos)
+        {
+            return;
+        }
+        
         Gizmos.color = Color.white;
         
         for (int x = 0; x < _width; x++)

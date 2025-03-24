@@ -13,10 +13,9 @@ public partial class WindRandomizationSystem : SystemBase
     {
         float time = (float)SystemAPI.Time.ElapsedTime;
         
-        foreach (var (clothSettings, windSettings) in 
+        foreach ((RefRW<ClothSettings> clothSettings, RefRW<WindRandomizationSettings> windSettings) in 
                  SystemAPI.Query<RefRW<ClothSettings>, RefRW<WindRandomizationSettings>>())
         {
-            // Update wind only at certain intervals for performance
             if (time - windSettings.ValueRO.LastUpdateTime < windSettings.ValueRO.ChangeSpeed * 0.1f)
             {
                 continue;
