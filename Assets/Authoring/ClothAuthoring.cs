@@ -254,7 +254,6 @@ public class ClothAuthoring : MonoBehaviour
     {
         Gizmos.color = Color.white;
         
-        // Draw cloth grid
         for (int x = 0; x < _width; x++)
         {
             for (int y = 0; y < _height; y++)
